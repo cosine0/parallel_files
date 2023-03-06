@@ -58,7 +58,7 @@ def func_wrapper(func: Callable[[Path, Path], None], is_dir, path: Path,
                  root: Path) -> None:
     """ wrapper to catch exceptions and print progress """
     global num_done_files, num_done_dirs, num_done_bytes
-    size = path.stat().st_size
+    size = path.stat(follow_symlinks=False).st_size
     try:
         func(path, root)
     except:  # noqa
@@ -140,6 +140,9 @@ def _parallel_pre_order_apply(
         parent_future = dirpath_to_future.pop(parent)
         for dirname in dirnames:
             dirpath = parent / dirname
+            if dirpath.is_symlink():
+                filenames.append(dirname)
+                continue
             future = executor.submit(
                 after_futures_done, [parent_future],
                 lambda path=dirpath: dir_func(path, root_dir))
@@ -167,10 +170,16 @@ def _parallel_post_order_apply(
         parent = Path(parent)
         child_futures = []
         for dirname in dirnames:
+            dirpath = parent / dirname
+            if dirpath.is_symlink():
+                filenames.append(dirname)
+                continue
             child_futures.append(dirpath_to_future.pop(parent / dirname))
 
         for filename in filenames:
-            future = executor.submit(file_func, parent / filename, root_dir)
+            filepath = parent / filename
+            # there's some symlinks to directories in the filenames
+            future = executor.submit(file_func, filepath, root_dir)
             future.add_done_callback(
                 lambda _, path=parent: print_progress_inplace(path))
             child_futures.append(future)
