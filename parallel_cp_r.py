@@ -6,13 +6,29 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 
-from parallel_traversal import parallel_recursive_apply
+from parallel_traversal import parallel_recursive_apply, FileType
+
+src_inode_to_dest_path: Dict[int, Path] = {}
+
+
+def get_mount_point(path: Path) -> Path:
+    """ get mount point of path """
+    path = path.absolute()
+    while not os.path.ismount(path):
+        path = path.parent
+    return path
+
+
+def relative_to_mount(path: Path) -> Path:
+    """ get path relative to its mount point """
+    mount_point = get_mount_point(path)
+    return path.absolute().relative_to(mount_point)
 
 
 def copy_dir(src: Path, src_root: Path, dest_root: Path,
-             as_child) -> None:
+             as_child: bool) -> None:
     """ copy dir to the corresponding location in dest_root """
     # assume that the parent directory of dest exists
     if as_child:
@@ -20,8 +36,12 @@ def copy_dir(src: Path, src_root: Path, dest_root: Path,
     else:
         dest = dest_root / src.relative_to(src_root)
     # make directory then copy metadata
-    dest.mkdir(parents=False, exist_ok=False)
-    shutil.copystat(src, dest, follow_symlinks=False)
+    try:
+        dest.mkdir(parents=False, exist_ok=True)
+        shutil.copystat(src, dest, follow_symlinks=False)
+    except OSError:
+        import traceback
+        print(f'\r{traceback.format_exc()}')
 
 
 def copy_file(src: Path, src_root: Path, dest_root: Path,
@@ -32,11 +52,93 @@ def copy_file(src: Path, src_root: Path, dest_root: Path,
     else:
         dest = dest_root / src.relative_to(src_root)
     # assume that the parent directory of dest exists
-    shutil.copy2(src, dest, follow_symlinks=False)
+    try:
+        file_type = FileType.from_path(src)
+        # skip special files
+        if file_type in (FileType.DEVICE, FileType.UNKNOWN):
+            print(f'\rWarning: Skipped {src}: Non-regular file (device, '
+                  f'named pipe, socket, etc.)')
+            return
+        if file_type in (FileType.SYMLINK, FileType.JUNCTION):
+            link_target = os.readlink(src)
+            if link_target.startswith('\\\\?\\Volume{'):
+                print(f'\rWarning: Skipped {src}: Volume mount point')
+                return
+            if link_target.startswith('\\\\?\\'):
+                link_target = link_target[4:]
+            link_target = Path(link_target)
+            if os.path.isabs(link_target):
+                if not os.path.lexists(link_target):
+                    relative_target = relative_to_mount(link_target)
+                    dest_mount = get_mount_point(dest)
+                    if os.path.lexists(dest_mount / relative_target):
+                        print(f'\rWarning: Copying as relative link {src}: '
+                              'Broken link')
+                        link_target = dest_mount / relative_target
+                        link_target = Path(os.path.relpath(link_target, dest))
+                    else:
+                        print(f'\rWarning: Skipped {src}: Broken link')
+                        return
+            if sys.platform == 'win32':
+                if file_type == FileType.SYMLINK:
+                    try:
+                        dest.symlink_to(link_target)
+                    except OSError:
+                        print(f'\rWarning: Copying as junction {src}: '
+                              'Do not have permission to create symlink')
+                        import _winapi
+                        try:
+                            _winapi.CreateJunction(str(link_target), str(dest))
+                        except FileNotFoundError:
+                            print(f'\rWarning: Skipped {src}: Broken link')
+                        return
+                elif file_type == FileType.JUNCTION:
+                    import _winapi
+                    try:
+                        _winapi.CreateJunction(str(link_target), str(dest))
+                    except FileNotFoundError:
+                        print(f'\rWarning: Skipped {src}: Broken link')
+                    return
+            else:
+                dest.symlink_to(link_target)
+                shutil.copystat(src, dest, follow_symlinks=False)
+                return
+
+        # hard linked files
+        file_stat = src.lstat()
+        if file_stat.st_nlink > 1:
+            if file_stat.st_ino in src_inode_to_dest_path:
+                # hard link to a file that has already been copied
+                try:
+                    dest.hardlink_to(src_inode_to_dest_path[file_stat.st_ino])
+                except OSError:
+                    pass
+                shutil.copystat(src, dest, follow_symlinks=False)
+                print(f'\rInfo: {src} is copied as a hard link. '
+                      f'source has {file_stat.st_nlink} links, '
+                      f'destination has {dest.lstat().st_nlink} links.')
+                return
+
+            print(f'\rWarning: {src} is a hard-link. This file has '
+                  f'{file_stat.st_nlink} links.')
+            src_inode_to_dest_path[file_stat.st_ino] = dest
+
+        shutil.copy2(src, dest, follow_symlinks=False)
+    except PermissionError:
+        if dest.exists():
+            if sys.platform == 'win32':
+                dest.chmod(0o777)
+            else:
+                dest.chmod(0o777, follow_symlinks=False)
+            dest.unlink()
+            shutil.copy2(src, dest, follow_symlinks=False)
+    except OSError:
+        import traceback
+        print(f'\r{traceback.format_exc()}')
 
 
 def parallel_cp_r(source_paths: List[str], dest_path: str,
-                  num_max_threads: int = 1) -> None:
+                  num_max_threads: int = 256) -> None:
     """ delete dirs and files in parallel """
     dest = Path(dest_path)
     if dest.exists():
@@ -50,7 +152,7 @@ def parallel_cp_r(source_paths: List[str], dest_path: str,
                                      "directory when copying multiple "
                                      "sources.")
         if not os.path.isdir(source_paths[0]):
-            shutil.copy2(source_paths[0], dest_path)
+            shutil.copy2(source_paths[0], dest_path, follow_symlinks=False)
             return
         # copy directory as a new name
         as_child = False
@@ -67,7 +169,6 @@ def parallel_cp_r(source_paths: List[str], dest_path: str,
 
 def main() -> None:
     """ main function """
-
     if len(sys.argv) < 3:
         print("Usage: python parallel_cp_r.py <source> <source> ... <dest>")
         print("    You can use wildcards * and ? to specify multiple "
@@ -78,10 +179,14 @@ def main() -> None:
     paths = []
     for pattern in sys.argv[1:-1]:
         if sys.version_info >= (3, 11):
-            paths.extend(
-                glob.glob(pattern, recursive=True, include_hidden=True))
+            matches = glob.glob(pattern, recursive=True, include_hidden=True)
         else:
-            paths.extend(glob.glob(pattern, recursive=True))
+            matches = glob.glob(pattern, recursive=True)
+        if not matches:
+            # if pattern does not match anything, skip it
+            print(f"Warning: Skipped {pattern}: Does not match "
+                  "any file or directory.")
+        paths.extend(matches)
 
     # copy files and directories
     parallel_cp_r(paths, sys.argv[-1])

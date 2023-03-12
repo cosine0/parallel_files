@@ -13,7 +13,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['concurrent.futures.process', 'subprocess', 'email', 'pickle', 'ssl', 'socket', 'shlex', 'http', 'gzip', 'bz2', 'lzma', 'netrc', 'tarfile', 'zipfile', 'ftplib', 'csv', 'argparse', 'hashlib', 'fractions', 'dis', 'decimal', 'calendar', 'ast', 'struct', '_py_abc', 'base64', 'bisect', 'getopt', 'getpass', 'gettext', 'stringprep', 'mimetypes', 'random', 'statistics', 'tempfile', 'tracemalloc', 'datetime', '_pydecimal', '_strptime', 'copy', 'contextvars', 'nturl2path', 'numbers', 'opcode', 'urllib.request', 'urllib.response', 'quopri', 'encodings.quopri_codec', 'encodings.idna', 'encodings.bz2_codec', 'encodings.base64_codec', 'abc', 'posix', 'posixpath'],
+    excludes=['concurrent.futures.process', 'subprocess', 'email', 'pickle', 'ssl', 'socket', 'shlex', 'http', 'gzip', 'bz2', 'lzma', 'netrc', 'tarfile', 'zipfile', 'ftplib', 'csv', 'argparse', 'hashlib', 'fractions', 'decimal', 'calendar', 'struct', '_py_abc', 'base64', 'bisect', 'getopt', 'getpass', 'gettext', 'stringprep', 'mimetypes', 'random', 'statistics', 'tempfile', 'tracemalloc', 'datetime', '_pydecimal', '_strptime', 'copy', 'contextvars', 'nturl2path', 'numbers', 'urllib.request', 'urllib.response', 'quopri', 'encodings.quopri_codec', 'encodings.idna', 'encodings.bz2_codec', 'encodings.base64_codec', 'abc', 'posix', 'posixpath', 'pyexpat'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -41,5 +41,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='NONE',
 )
