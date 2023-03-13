@@ -217,6 +217,7 @@ def parallel_recursive_apply(
     file_func: Callable[[Path, Path], Any],
     pre_order: bool = True,
     num_max_threads: int = 512,
+    strict_hierarchical_order: bool = True,
     print_lock: Optional[threading.Lock] = None) -> None:
     """
     Apply dir_func and file_func to all files and directories in paths
@@ -231,7 +232,11 @@ def parallel_recursive_apply(
         Note that you should balance the time spent in dir_func and
         file_func with the number of threads, because the more threads
         you use, the more time is spent in thread management.
-    :param print_lock: If not None, use this lock to print progress
+    :param strict_hierarchical_order: If True, apply dir_func and file_func
+        after their parents are done (for pre_order=True) or after
+        all their children are done (for pre_order=False).
+    :param print_lock: If not None, use this lock to print progress and
+        error messages.
     """
     global start_time
     start_time = time.time()
@@ -248,19 +253,21 @@ def parallel_recursive_apply(
             if pre_order:
                 _parallel_pre_order_apply(path,
                                           dir_func, file_func,  # type: ignore
-                                          executor)
+                                          executor, strict_hierarchical_order)
             else:
                 _parallel_post_order_apply(path,
                                            dir_func, file_func,  # type: ignore
-                                           executor)
+                                           executor, strict_hierarchical_order)
 
     print_progress_inplace(keep_interval=False)
+    print()
 
 
 def _parallel_pre_order_apply(root_dir: str,
                               dir_func: Callable[[Path, Path], Any],
                               file_func: Callable[[Path, Path], Any],
-                              executor: ThreadPoolExecutor) -> None:
+                              executor: ThreadPoolExecutor,
+                              strict_hierarchical_order: bool) -> None:
     """ pre-order apply """
     root_dir = Path(root_dir)
     parent_future = executor.submit(dir_func, root_dir, root_dir)
@@ -278,7 +285,8 @@ def _parallel_pre_order_apply(root_dir: str,
                 prune_dir_indexes.append(i)
                 continue
             future = executor.submit(
-                after_futures_done, [parent_future],
+                after_futures_done,
+                [parent_future] if strict_hierarchical_order else [],
                 lambda path=dirpath: dir_func(path, root_dir))
             dirpath_to_future[dirpath] = future
         for i in reversed(prune_dir_indexes):
@@ -289,15 +297,16 @@ def _parallel_pre_order_apply(root_dir: str,
                 # nonexistent -> skip
                 continue
             executor.submit(
-                after_futures_done, [parent_future],
+                after_futures_done,
+                [parent_future] if strict_hierarchical_order else [],
                 lambda path=filepath: file_func(path, root_dir))
 
 
 def _parallel_post_order_apply(root_dir: str,
                                dir_func: Callable[[Path, Path], Any],
                                file_func: Callable[[Path, Path], Any],
-                               executor: ThreadPoolExecutor
-                               ) -> None:
+                               executor: ThreadPoolExecutor,
+                               strict_hierarchical_order: bool) -> None:
     """ post-order apply """
     root_dir = Path(root_dir)
     dirpath_to_future = {}
@@ -317,6 +326,8 @@ def _parallel_post_order_apply(root_dir: str,
             future = executor.submit(file_func, filepath, root_dir)
             child_futures.append(future)
 
-        future = executor.submit(after_futures_done, child_futures,
-                                 lambda path=parent: dir_func(path, root_dir))
+        future = executor.submit(
+            after_futures_done,
+            child_futures if strict_hierarchical_order else [],
+            lambda path=parent: dir_func(path, root_dir))
         dirpath_to_future[parent] = future
