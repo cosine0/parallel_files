@@ -13,17 +13,17 @@ from parallel_traversal import parallel_recursive_apply, FileType
 src_inode_to_dest_path: Dict[int, Path] = {}
 
 
-def get_mount_point(path: Path) -> Path:
+@functools.lru_cache(maxsize=65536)
+def get_mount_point(absolute_path: Path) -> Path:
     """ get mount point of path """
-    path = path.absolute()
-    while not os.path.ismount(path):
-        path = path.parent
-    return path
+    if os.path.ismount(absolute_path):
+        return absolute_path
+    return get_mount_point(absolute_path.parent)
 
 
 def relative_to_mount(path: Path) -> Path:
     """ get path relative to its mount point """
-    mount_point = get_mount_point(path)
+    mount_point = get_mount_point(path.absolute())
     return path.absolute().relative_to(mount_point)
 
 
@@ -45,7 +45,7 @@ def copy_dir(src: Path, src_root: Path, dest_root: Path,
 
 
 def copy_file(src: Path, src_root: Path, dest_root: Path,
-              as_child) -> None:
+              as_child: bool) -> None:
     """ copy file to the corresponding location in dest_root """
     if as_child:
         dest = dest_root / src_root.name / src.relative_to(src_root)
@@ -68,27 +68,33 @@ def copy_file(src: Path, src_root: Path, dest_root: Path,
                 link_target = link_target[4:]
             link_target = Path(link_target)
             if os.path.isabs(link_target):
+                dest_target = link_target
                 if not os.path.lexists(link_target):
-                    relative_target = relative_to_mount(link_target)
-                    dest_mount = get_mount_point(dest)
-                    if os.path.lexists(dest_mount / relative_target):
-                        print(f'\rWarning: Copying as relative link {src}: '
-                              'Broken link')
-                        link_target = dest_mount / relative_target
-                        link_target = Path(os.path.relpath(link_target, dest))
+                    target_from_mount = relative_to_mount(link_target)
+                    dest_mount = get_mount_point(dest.absolute())
+                    if os.path.lexists(dest_mount / target_from_mount):
+                        dest_target = dest_mount / target_from_mount
+                        link_target = Path(os.path.relpath(dest_target, dest))
                     else:
                         print(f'\rWarning: Skipped {src}: Broken link')
                         return
+            else:
+                dest_target = dest.parent / link_target
             if sys.platform == 'win32':
                 if file_type == FileType.SYMLINK:
                     try:
                         dest.symlink_to(link_target)
                     except OSError:
-                        print(f'\rWarning: Copying as junction {src}: '
-                              'Do not have permission to create symlink')
+                        if not dest_target.is_dir():
+                            # junctions can only point to directories
+                            print(f'\rWarning: Skipped {src}: No rights to '
+                                  'create a symbolic link')
+                            return
                         import _winapi
                         try:
                             _winapi.CreateJunction(str(link_target), str(dest))
+                            print(f'\rWarning: Copied as a junction {src}: '
+                                  'No rights to create a symbolic link')
                         except FileNotFoundError:
                             print(f'\rWarning: Skipped {src}: Broken link')
                         return
