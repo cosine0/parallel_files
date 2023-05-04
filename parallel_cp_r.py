@@ -59,8 +59,14 @@ def copy_file(src: Path, src_root: Path, dest_root: Path,
             print(f'\rWarning: Skipped {src}: Non-regular file (device, '
                   f'named pipe, socket, etc.)')
             return
-        if file_type in (FileType.SYMLINK, FileType.JUNCTION):
-            link_target = os.readlink(src)
+        if file_type in \
+                (FileType.SYMLINK, FileType.JUNCTION, FileType.WSL_SYMLINK):
+            if file_type == FileType.WSL_SYMLINK:
+                import reparse_points
+                _, reparse_data = reparse_points.get_reparse_info(src)
+                link_target = reparse_data.substitute_name
+            else:
+                link_target = os.readlink(src)
             if link_target.startswith('\\\\?\\Volume{'):
                 print(f'\rWarning: Skipped {src}: Volume mount point')
                 return
@@ -81,14 +87,18 @@ def copy_file(src: Path, src_root: Path, dest_root: Path,
             else:
                 dest_target = dest.parent / link_target
             if sys.platform == 'win32':
-                if file_type == FileType.SYMLINK:
+                if file_type in (FileType.SYMLINK, FileType.WSL_SYMLINK):
+                    if file_type == FileType.WSL_SYMLINK:
+                        print('\rWarning: Treating as an ordinary symbolic '
+                              f'link: {src}: A symbolic link created in WSL')
                     try:
                         dest.symlink_to(link_target)
+                        return
                     except OSError:
                         if not dest_target.is_dir():
                             # junctions can only point to directories
                             print(f'\rWarning: Skipped {src}: No rights to '
-                                  'create a symbolic link')
+                                  'create a symbolic link (to a file)')
                             return
                         import _winapi
                         try:

@@ -1,8 +1,10 @@
 import enum
 import functools
 import os
+import re
 import shutil
 import stat
+import sys
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
@@ -74,6 +76,7 @@ class FileType(enum.Enum):
     FILE = enum.auto()
     DIRECTORY = enum.auto()
     SYMLINK = enum.auto()
+    WSL_SYMLINK = enum.auto()
     JUNCTION = enum.auto()
     DEVICE = enum.auto()
     UNKNOWN = enum.auto()
@@ -90,14 +93,23 @@ class FileType(enum.Enum):
         try:
             os.readlink(path)
             return FileType.JUNCTION
-        except OSError:
+        except (OSError, ValueError):
             pass
         if stat.S_ISDIR(mode):
             return FileType.DIRECTORY
         if stat.S_ISREG(mode):
+            if sys.platform == "win32":
+                import reparse_points
+                if reparse_points.is_reparse_point(path):
+                    reparse_tag, _ = reparse_points.get_reparse_info(path)
+                    if reparse_tag == \
+                            reparse_points.ReparseTag.IO_REPARSE_TAG_LX_SYMLINK:
+                        return FileType.WSL_SYMLINK
+                    return FileType.UNKNOWN
             return FileType.FILE
+
         if stat.S_ISBLK(mode) or stat.S_ISCHR(mode) or stat.S_ISFIFO(mode) or \
-            stat.S_ISSOCK(mode):
+                stat.S_ISSOCK(mode):
             return FileType.DEVICE
         return FileType.UNKNOWN
 
@@ -245,8 +257,12 @@ def parallel_recursive_apply(
                                  is_dir=True, print_lock=print_lock)
     file_func = functools.partial(call_with_progress_and_try, file_func,
                                   is_dir=False, print_lock=print_lock)
+    drive_letter_regex = re.compile(r"^[a-zA-Z]:$")
     with ThreadPoolExecutor(max_workers=num_max_threads) as executor:
         for path in paths:
+            # workaround for https://github.com/python/cpython/issues/80486
+            if drive_letter_regex.fullmatch(path) is not None:
+                path += '/'
             if not os.path.isdir(path):
                 executor.submit(file_func, Path(path))
                 continue
