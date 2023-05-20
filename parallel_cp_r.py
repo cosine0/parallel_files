@@ -142,12 +142,17 @@ def copy_file(src: Path, src_root: Path, dest_root: Path,
         shutil.copy2(src, dest, follow_symlinks=False)
     except PermissionError:
         if dest.exists():
-            if sys.platform == 'win32':
-                dest.chmod(0o777)
-            else:
-                dest.chmod(0o777, follow_symlinks=False)
-            dest.unlink()
-            shutil.copy2(src, dest, follow_symlinks=False)
+            try:
+                if sys.platform == 'win32':
+                    dest.chmod(0o777)
+                else:
+                    dest.chmod(0o777, follow_symlinks=False)
+                dest.unlink()
+                shutil.copy2(src, dest, follow_symlinks=False)
+            except PermissionError:
+                print(f'\rWarning: Skipped {src}: Permission denied')
+        else:
+            print(f'\rWarning: Skipped {src}: Permission denied')
     except OSError:
         import traceback
         print(f'\r{traceback.format_exc()}')

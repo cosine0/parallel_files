@@ -10,9 +10,11 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Iterable, List, Optional, Callable, Any
+from wcwidth import wcswidth
 
 
 def walk_post_order(top):
+    # Modified from os.walk()
     dirs = []
     nondirs = []
     walk_dirs = []
@@ -103,13 +105,16 @@ class FileType(enum.Enum):
                 if reparse_points.is_reparse_point(path):
                     reparse_tag, _ = reparse_points.get_reparse_info(path)
                     if reparse_tag == \
-                            reparse_points.ReparseTag.IO_REPARSE_TAG_LX_SYMLINK:
+                        reparse_points.ReparseTag.IO_REPARSE_TAG_LX_SYMLINK:
                         return FileType.WSL_SYMLINK
+                    if reparse_tag == \
+                        reparse_points.ReparseTag.IO_REPARSE_TAG_DEDUP:
+                        return FileType.FILE
                     return FileType.UNKNOWN
             return FileType.FILE
 
         if stat.S_ISBLK(mode) or stat.S_ISCHR(mode) or stat.S_ISFIFO(mode) or \
-                stat.S_ISSOCK(mode):
+            stat.S_ISSOCK(mode):
             return FileType.DEVICE
         return FileType.UNKNOWN
 
@@ -140,13 +145,40 @@ start_time = 0
 last_print_time = 0
 
 
+def truncate_str_end(s: str, max_width: int) -> str:
+    """Truncate a string from the end to fit within a certain width."""
+    width = 0
+    result = ""
+    for char in s:
+        char_width = wcwidth(char)
+        if width + char_width > max_width:
+            break
+        result += char
+        width += char_width
+    return result
+
+
+def truncate_str_middle(s: str, max_width: int) -> str:
+    """Truncate a string from the middle to fit within a certain width."""
+    if wcswidth(s) <= max_width:
+        return s
+
+    half_max_width = max_width // 2 - 1  # for '...'
+    first_half = truncate_str_end(s, half_max_width)
+    second_half = s[::-1]
+    second_half = truncate_str_end(second_half, half_max_width)
+    second_half = second_half[::-1]
+
+    return first_half + "..." + second_half
+
+
 def print_progress_inplace(path: Optional[Path] = None,
                            print_lock: Optional[threading.Lock] = None,
-                           keep_interval=True) -> None:
+                           keep_time_interval=True) -> None:
     """ print a path in place of the previous line """
     global last_print_time
     current_time = time.time()
-    if keep_interval and current_time - last_print_time < 0.1:
+    if keep_time_interval and current_time - last_print_time < 0.1:
         return
     last_print_time = current_time
 
@@ -165,22 +197,29 @@ def print_progress_inplace(path: Optional[Path] = None,
     if path_text:
         message += f", current: "
 
-    terminal_width = shutil.get_terminal_size().columns - 1
-    if len(message) > terminal_width:
-        message = message[:terminal_width]
-    elif len(message) + len(path_text) > terminal_width:
-        # ellipsis the middle of the path
-        path_text = path_text[:(terminal_width - len(message) - 3) // 2] + \
-                    "..." + \
-                    path_text[-(terminal_width - len(message) - 3) // 2:]
-    message += path_text
-    message = message.ljust(terminal_width)
+    terminal_width = shutil.get_terminal_size().columns
+    message_width = wcswidth(message)
+    path_text_width = wcswidth(path_text)
+
+    if message_width > terminal_width:
+        message = truncate_str_end(message, terminal_width)
+        message_width = terminal_width
+    elif message_width + path_text_width > terminal_width:
+        path_text = truncate_str_middle(path_text,
+                                        terminal_width - message_width - 3)
+        path_text_width = wcswidth(path_text)
+        message += path_text
+        message_width += path_text_width
+    else:
+        message += path_text
+        message_width += path_text_width
+    message += " " * (terminal_width - message_width)
 
     if print_lock is not None:
         with print_lock:
-            print(f"\r{message}", end="")
+            print(f"\r{message}", end="", flush=True)
     else:
-        print(f"\r{message}", end="")
+        print(f"\r{message}", end="", flush=True)
 
 
 def call_with_progress_and_try(
@@ -275,7 +314,7 @@ def parallel_recursive_apply(
                                            dir_func, file_func,  # type: ignore
                                            executor, strict_hierarchical_order)
 
-    print_progress_inplace(keep_interval=False)
+    print_progress_inplace(keep_time_interval=False)
     print()
 
 
