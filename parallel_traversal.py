@@ -10,7 +10,8 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Iterable, List, Optional, Callable, Any
-from wcwidth import wcswidth
+
+from wcwidth import wcwidth, wcswidth
 
 
 def walk_post_order(top):

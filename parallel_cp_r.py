@@ -198,7 +198,9 @@ def main() -> None:
 
     # get paths from command line arguments
     paths = []
+    # noinspection DuplicatedCode
     for pattern in sys.argv[1:-1]:
+        # noinspection DuplicatedCode
         if sys.version_info >= (3, 11):
             matches = glob.glob(pattern, recursive=True, include_hidden=True)
         else:
