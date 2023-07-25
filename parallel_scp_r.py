@@ -115,8 +115,10 @@ def parallel_scp_r(dest_host, dest_port, dest_user, identity_filename,
 def main():
     parser = argparse.ArgumentParser(
         description='Parallel scp -r with paramiko')
-    parser.add_argument('src', type=str, help='source paths', nargs='+')
-    parser.add_argument('dest', type=str, help='remote destination path')
+    parser.add_argument('local_src', type=str, help='local source paths', nargs='+')
+    parser.add_argument('remote_dest', type=str,
+                         help='remote destination path in the form of '
+                                'user@host:path')
     parser.add_argument('-t', '--threads', type=int, default=64,
                         help='number of threads')
     parser.add_argument('-P', '--port', type=int, default=22,
@@ -125,11 +127,11 @@ def main():
                         help='identity file')
     args = parser.parse_args()
 
-    # dest -> user@host:path
+    # remote_dest -> user@host:path
     m = re.match(r'((?P<user>[^@]+)@)?(?P<host>[^:]+):(?P<path>.*$)',
-                 args.dest)
+                 args.remote_dest)
     if m is None:
-        raise ValueError(f'Invalid destination: {args.dest}')
+        raise ValueError(f'Invalid destination: {args.remote_dest}')
     dest_user = m.group('user') or os.getlogin()
     dest_host = m.group('host')
     dest_path = m.group('path')
@@ -137,7 +139,7 @@ def main():
     # src -> paths
     paths = []
     # noinspection DuplicatedCode
-    for pattern in args.src:
+    for pattern in args.local_src:
         # noinspection DuplicatedCode
         if sys.version_info >= (3, 11):
             matches = glob.glob(pattern, recursive=True, include_hidden=True)
